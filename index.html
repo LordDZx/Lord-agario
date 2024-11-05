@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>لعبة الخلايا المتقدمة</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        #gameContainer {
+            position: relative;
+        }
+        canvas {
+            border: 1px solid #333;
+            background-color: white;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #menu {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        button {
+            margin: 5px;
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <div>النقاط: <span id="scoreValue">0</span></div>
+            <div>أعلى نقاط: <span id="highScore">0</span></div>
+        </div>
+        <div id="menu">
+            <h1>لعبة الخلايا المتقدمة</h1>
+            <button id="singlePlayerBtn">لاعب واحد</button>
+            <button id="twoPlayersBtn">لاعبان</button>
+            <p>تم التطوير بواسطة Ahmed.R</p>
+        </div>
+    </div>
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('scoreValue');
+        const highScoreElement = document.getElementById('highScore');
+        const menu = document.getElementById('menu');
+        const singlePlayerBtn = document.getElementById('singlePlayerBtn');
+        const twoPlayersBtn = document.getElementById('twoPlayersBtn');
+
+        // تعيين حجم الكانفاس ليكون أكبر من الشاشة
+        const WORLD_WIDTH = 4000;
+        const WORLD_HEIGHT = 4000;
+        canvas.width = window.innerWidth - 40;
+        canvas.height = window.innerHeight - 40;
+
+        // متغيرات اللعبة
+        let gameMode = 'menu';
+        let players = [];
+        let score = 0;
+        let highScore = 0;
+        const WIN_SCORE = 100000;
+        let camera = { x: 0, y: 0 };
+
+        // مصفوفة الطعام
+        const foods = [];
+        const foodCount = 1000;
+        const foodRadius = 5;
+
+        // مصفوفة الخصوم
+        const enemies = [];
+        const enemyCount = 50;
+
+        function createPlayer(isAI = false) {
+            return {
+                x: Math.random() * WORLD_WIDTH,
+                y: Math.random() * WORLD_HEIGHT,
+                radius: 20,
+                color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+                score: 0,
+                isAI: isAI,
+                target: null
+            };
+        }
+
+        // دالة لإنشاء طعام عشوائي
+        function createFood() {
+            return {
+                x: Math.random() * WORLD_WIDTH,
+                y: Math.random() * WORLD_HEIGHT,
+                radius: foodRadius,
+                color: `hsl(${Math.random() * 360}, 70%, 50%)`
+            };
+        }
+
+        // دالة لإنشاء عدو ذكي
+        function createSmartEnemy() {
+            const radius = Math.random() * 30 + 10;
+            return {
+                x: Math.random() * WORLD_WIDTH,
+                y: Math.random() * WORLD_HEIGHT,
+                radius: radius,
+                color: `hsl(${Math.random() * 360}, 70%, 50%)`,
+                speedX: Math.random() * 4 - 2,
+                speedY: Math.random() * 4 - 2,
+                target: null,
+                thinkTime: 0
+            };
+        }
+
+        // إنشاء الطعام الأولي
+        for (let i = 0; i < foodCount; i++) {
+            foods.push(createFood());
+        }
+
+        // إنشاء الأعداء الأوليين
+        for (let i = 0; i < enemyCount; i++) {
+            enemies.push(createSmartEnemy());
+        }
+
+        // التحقق من التصادم بين دائرتين
+        function checkCollision(x1, y1, r1, x2, y2, r2) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            return distance < r1 + r2;
+        }
+
+        // تحديث حركة اللاعب
+        function updatePlayerPosition(player, targetX, targetY) {
+            const dx = targetX - player.x;
+            const dy = targetY - player.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const speed = 5 * (30 / player.radius); // السرعة تتناقص مع زيادة الحجم
+            
+            if (distance > 5) {
+                player.x += (dx / distance) * speed;
+                player.y += (dy / distance) * speed;
+            }
+
+            // التأكد من بقاء اللاعب داخل حدود العالم
+            player.x = Math.max(player.radius, Math.min(WORLD_WIDTH - player.radius, player.x));
+            player.y = Math.max(player.radius, Math.min(WORLD_HEIGHT - player.radius, player.y));
+        }
+
+        // تحديث حركة الأعداء الأذكياء
+        function updateSmartEnemies() {
+            enemies.forEach(enemy => {
+                enemy.thinkTime--;
+                if (enemy.thinkTime <= 0) {
+                    // إعادة تقييم الهدف
+                    enemy.target = null;
+                    let closestFood = null;
+                    let closestFoodDistance = Infinity;
+                    let closestSmallerPlayer = null;
+                    let closestSmallerPlayerDistance = Infinity;
+
+                    // البحث عن أقرب طعام أو لاعب أصغر
+                    foods.concat(players).forEach(item => {
+                        const distance = Math.sqrt((enemy.x - item.x) ** 2 + (enemy.y - item.y) ** 2);
+                        if (item.radius && item.radius < enemy.radius && distance < closestSmallerPlayerDistance) {
+                            closestSmallerPlayer = item;
+                            closestSmallerPlayerDistance = distance;
+                        } else if (!item.radius && distance < closestFoodDistance) {
+                            closestFood = item;
+                            closestFoodDistance = distance;
+                        }
+                    });
+
+                    // اختيار الهدف بناءً على المسافة والحجم
+                    if (closestSmallerPlayer && closestSmallerPlayerDistance < closestFoodDistance * 2) {
+                        enemy.target = closestSmallerPlayer;
+                    } else {
+                        enemy.target = closestFood;
+                    }
+
+                    enemy.thinkTime = 30; // إعادة التفكير كل 30 إطار
+                }
+
+                if (enemy.target) {
+                    const dx = enemy.target.x - enemy.x;
+                    const dy = enemy.target.y - enemy.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    const speed = 3 * (30 / enemy.radius); // السرعة تتناقص مع زيادة الحجم
+                    
+                    enemy.x += (dx / distance) * speed;
+                    enemy.y += (dy / distance) * speed;
+                }
+
+                // التأكد من بقاء العدو داخل حدود العالم
+                enemy.x = Math.max(enemy.radius, Math.min(WORLD_WIDTH - enemy.radius, enemy.x));
+                enemy.y = Math.max(enemy.radius, Math.min(WORLD_HEIGHT - enemy.radius, enemy.y));
+            });
+        }
+
+        // رسم دائرة
+        function drawCircle(x, y, radius, color) {
+            ctx.beginPath();
+            ctx.arc(x - camera.x, y - camera.y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        // تحديث الكاميرا
+        function updateCamera() {
+            if (players.length > 0) {
+                camera.x = players[0].x - canvas.width / 2;
+                camera.y = players[0].y - canvas.height / 2;
+            }
+        }
+
+        // تحديث اللعبة
+        function update() {
+            // مسح الكانفاس
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // تحديث الكاميرا
+            updateCamera();
+
+            // تحديث الأعداء الأذكياء
+            updateSmartEnemies();
+
+            // تحديث وعرض اللاعبين
+            players.forEach((player, playerIndex) => {
+                if (player.isAI) {
+                    // تحديث اللاعب الآلي
+                    let closestFood = null;
+                    let closestFoodDistance = Infinity;
+                    foods.forEach(food => {
+                        const distance = Math.sqrt((player.x - food.x) ** 2 + (player.y - food.y) ** 2);
+                        if (distance < closestFoodDistance) {
+                            closestFood = food;
+                            closestFoodDistance = distance;
+                        }
+                    });
+                    if (closestFood) {
+                        updatePlayerPosition(player, closestFood.x, closestFood.y);
+                    }
+                } else if (playerIndex === 0) {
+                    // تحديث اللاعب الأول (التحكم بالماوس)
+                    updatePlayerPosition(player, mouseX + camera.x, mouseY + camera.y);
+                } else if (playerIndex === 1) {
+                    // تحديث اللاعب الثاني (التحكم بالأسهم)
+                    const keys = {
+                        ArrowUp: { x: 0, y: -1 },
+                        ArrowDown: { x: 0, y: 1 },
+                        ArrowLeft: { x: -1, y: 0 },
+                        ArrowRight: { x: 1, y: 0 }
+                    };
+                    let dx = 0, dy = 0;
+                    for (const key in keys) {
+                        if (keysPressed[key]) {
+                            dx += keys[key].x;
+                            dy += keys[key].y;
+                        }
+                    }
+                    if (dx !== 0 || dy !== 0) {
+                        const length = Math.sqrt(dx * dx + dy * dy);
+                        dx /= length;
+                        dy /= length;
+                        updatePlayerPosition(player, player.x + dx * 100, player.y + dy * 100);
+                    }
+                }
+
+                // رسم اللاعب
+                drawCircle(player.x, player.y, player.radius, player.color);
+
+                // فحص الاصطدام مع الطعام
+                foods.forEach((food, index) => {
+                    if (checkCollision(player.x, player.y, player.radius, food.x, food.y, food.radius)) {
+                        foods.splice(index, 1);
+                        player.radius += 0.1;
+                        player.score += 10;
+                        foods.push(createFood());
+                    }
+                });
+
+                // فحص الاصطدام مع الأعداء والخلايا الأخرى
+                [...enemies, ...players].forEach((cell, index) => {
+                    if (cell !== player && checkCollision(player.x, player.y, player.radius, cell.x, cell.y, cell.radius)) {
+                        if (player.radius > cell.radius * 1.1) {
+                            // اللاعب يأكل الخلية
+                            player.radius += cell.radius / 3;
+                            player.score += Math.floor(cell.radius * 10);
+                            if (cell.isAI) {
+                                players.splice(index, 1);
+                                players.push(createPlayer(true));
+                            } else if (enemies.includes(cell)) {
+                                enemies.splice(enemies.indexOf(cell), 1);
+                                enemies.push(createSmartEnemy());
+                            }
+                        } else if (cell.radius > player.radius * 1.1) {
+                            // الخلية تأكل اللاعب
+                            if (!player.isAI) {
+                                alert(`انتهت اللعبة! النقاط: ${Math.floor(player.score)}`);
+                                resetGame();
+                                return;
+                            } else {
+                                players.splice(playerIndex, 1);
+                                players.push(createPlayer(true));
+                            }
+                        }
+                    }
+                });
+
+                // تحديث النتيجة
+                if (!player.isAI) {
+                    score = Math.max(score, Math.floor(player.score));
+                    scoreElement.textContent = score;
+                    if (score > highScore) {
+                        highScore = score;
+                        highScoreElement.textContent = highScore;
+                    }
+
+                    // التحقق من الفوز
+                    if (score >= WIN_SCORE) {
+                        alert("مبروك! لقد فزت باللعبة!");
+                        resetGame();
+                        return;
+                    }
+                }
+            });
+
+            // رسم الطعام
+            foods.forEach(food => {
+                
+                drawCircle(food.x, food.y, food.radius, food.color);
+            });
+
+            // رسم الأعداء
+            enemies.forEach(enemy => {
+                drawCircle(enemy.x, enemy.y, enemy.radius, enemy.color);
+            });
+
+            requestAnimationFrame(update);
+        }
+
+        // إعادة تعيين اللعبة
+        function resetGame() {
+            players = [createPlayer()];
+            if (gameMode === 'twoPlayers') {
+                players.push(createPlayer());
+            }
+            score = 0;
+            scoreElement.textContent = score;
+            
+            // إعادة تعيين الطعام
+            foods.length = 0;
+            for (let i = 0; i < foodCount; i++) {
+                foods.push(createFood());
+            }
+            
+            // إعادة تعيين الأعداء
+            enemies.length = 0;
+            for (let i = 0; i < enemyCount; i++) {
+                enemies.push(createSmartEnemy());
+            }
+        }
+
+        // متغيرات للتحكم
+        let mouseX = 0, mouseY = 0;
+        const keysPressed = {};
+
+        // تتبع حركة الماوس
+        canvas.addEventListener('mousemove', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = event.clientX - rect.left;
+            mouseY = event.clientY - rect.top;
+        });
+
+        // تتبع ضغطات المفاتيح
+        window.addEventListener('keydown', (event) => {
+            keysPressed[event.code] = true;
+        });
+
+        window.addEventListener('keyup', (event) => {
+            keysPressed[event.code] = false;
+        });
+
+        // بدء اللعبة بلاعب واحد
+        singlePlayerBtn.addEventListener('click', () => {
+            gameMode = 'singlePlayer';
+            menu.style.display = 'none';
+            resetGame();
+            update();
+        });
+
+        // بدء اللعبة بلاعبين
+        twoPlayersBtn.addEventListener('click', () => {
+            gameMode = 'twoPlayers';
+            menu.style.display = 'none';
+            resetGame();
+            update();
+        });
+    </script>
+</body>
+</html>
